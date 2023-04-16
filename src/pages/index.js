@@ -1,124 +1,375 @@
-import Image from 'next/image'
-import { Inter } from 'next/font/google'
+import React, { Component } from "react";
+import { ethers } from "ethers";
 
-const inter = Inter({ subsets: ['latin'] })
+import { ConnectWallet } from "./components/ConnectWallet";
+import { WaitingForTransactionMessage } from "./components/WaitingForTransactionMessage";
+import { TransactionErrorMessage } from "./components/TransactionErrorMessage";
 
-export default function Home() {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 w-full max-w-5xl items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/pages/index.js</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
+import auctionAddress from "./contracts/VipAuctionEngine-contract-address.json";
+import auctionArtifact from "./contracts/VipAuctionEngine.json";
 
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
+const HARDHAT_NETWORK_ID = "1337";
+const BSCT_NETWORK_ID = "97";
+const ERROR_CODE_TX_REJECTED_BY_USER = 4001;
+
+export default class extends Component {
+  constructor(props) {
+    super(props);
+
+    this.initialState = {
+      selectedAccount: null,
+      txBeingSent: null,
+      networkError: null,
+      transactionError: null,
+      balance: null,
+      auctionsLength: 0,
+      auctions: [
+        {
+          id: 0,
+          item: "",
+          ticketsSupply: 0,
+          minBid: 0,
+          ticket: "",
+          revenueAddress: "",
+          startAt: "",
+          endsAt: "",
+          ended: false,
+        },
+      ],
+    };
+
+    this.state = this.initialState;
+  }
+
+  _connectWallet = async () => {
+    if (window.ethereum === undefined) {
+      this.setState({
+        networkError: "Please install Metamask!",
+      });
+      return;
+    }
+
+    const [selectedAddress] = await window.ethereum.request({
+      method: "eth_requestAccounts",
+    });
+
+    if (!this._checkNetwork()) {
+      return;
+    }
+
+    this._initialize(selectedAddress);
+
+    window.ethereum.on("accountsChanged", ([newAddress]) => {
+      if (newAddress === undefined) {
+        return this._resetState();
+      }
+
+      this._initialize(newAddress);
+    });
+
+    window.ethereum.on("chainChanged", ([networkId]) => {
+      this._resetState();
+    });
+  };
+
+  async _initialize(selectedAddress) {
+    this._provider = new ethers.providers.Web3Provider(window.ethereum);
+
+    this._auction = new ethers.Contract(
+      auctionAddress.VipAuctionEngine,
+      auctionArtifact.abi,
+      this._provider.getSigner(0)
+    );
+
+    this.setState(
+      {
+        selectedAccount: selectedAddress,
+      },
+      async () => {
+        await this.updateBalance();
+        //await this.getAuctionsLength();
+      }
+    );
+
+    // // this.startingPrice = await this._auction.startingPrice();
+    // // this.startAt = await this._auction.startAt();
+    // // this.discountRate = await this._auction.discountRate();
+    // this.auctionInfo = await this._auction.auctions(index);
+
+    // this.checkAuctions = setInterval((index) => {
+    //   console.log(auctionInfo);
+
+    //   this.setState((state) => {
+    //     auctions[index] = [
+    //       {
+    //         item: "",
+    //         ticketsSupply: 0,
+    //         minBid: 0,
+    //         ticket: "",
+    //         revenueAddress: "",
+    //         startAt: "",
+    //         endAt: "",
+    //         ended: false,
+    //       },
+    //     ];
+    //   });
+    // }, 10000);
+  }
+  // const startBlockNumber = await this._provider.getBlockNumber()
+  // this._auction.on('Bought', (...args) => {
+  //   const event = args[args.length - 1]
+  //   if(event.blockNumber <= startBlockNumber) return
+
+  //   args[0], args[1]
+  // })
+
+  async updateBalance() {
+    const newBalance = (
+      await this._provider.getBalance(this.state.selectedAccount)
+    ).toString();
+
+    this.setState({
+      balance: newBalance,
+    });
+  }
+
+  _resetState() {
+    this.setState(this.initialState);
+  }
+
+  _checkNetwork() {
+    if (
+      window.ethereum.networkVersion === HARDHAT_NETWORK_ID ||
+      window.ethereum.networkVersion === BSCT_NETWORK_ID
+    ) {
+      return true;
+    }
+
+    this.setState({
+      networkError: "Please connect to localhost:8545",
+    });
+
+    return false;
+  }
+
+  _dismissNetworkError = () => {
+    this.setState({
+      networkError: null,
+    });
+  };
+
+  _dismissTransactionError = () => {
+    this.setState({
+      transactionError: null,
+    });
+  };
+
+  getAuctionsLength = async () => {
+    const auctionsLength = await this._auction.getAuctionsLength();
+
+    this.setState({
+      auctionsLength: auctionsLength.toNumber(),
+    });
+
+    return auctionsLength.toNumber();
+  };
+
+  getAuctionById = async (index) => {
+    const auctionInfo = await this._auction.auctions(index);
+
+    this.setState({
+      auctions: [
+        {
+          id: index,
+          item: auctionInfo.item,
+          ticketsSupply: auctionInfo.ticketsSupply.toNumber(),
+          minBid: ethers.utils.formatEther(auctionInfo.minBid.toNumber()),
+          ticket: auctionInfo.ticket,
+          revenueAddress: auctionInfo.revenueAddress,
+          startAt: auctionInfo.startAt.toNumber(),
+          endsAt: auctionInfo.endsAt.toNumber(),
+          ended: auctionInfo.ended,
+        },
+      ],
+    });
+  };
+
+  fillAuctions = async () => {
+    var ul = document.createElement("ul");
+
+    document.getElementById("auctionsList").appendChild(ul);
+    for (let i = 0; i < this.state.auctionsLength; i++) {
+      console.log(this.state.auctionsLength);
+      await this.getAuctionById(i);
+      var li = document.createElement("li");
+      ul.appendChild(li);
+      console.log(this.state.auctions[i].item);
+      li.innerHTML = li.innerHTML + state.auctions[i].item;
+    }
+  };
+
+  createAuction = async () => {
+    //console.log((ethers.utils.parseEther(this.state.currentPrice + 1)).toString())
+    console.log(document.getElementById("_item").value);
+    try {
+      const tx = await this._auction.createAuction(
+        document.getElementById("_item").value,
+        document.getElementById("_ticketsSupply").value,
+        ethers.utils.parseUnits(
+          document.getElementById("_minBid").value,
+          "ether"
+        ),
+        document.getElementById("_revenueAddress").value,
+        document.getElementById("_duration").value
+      );
+
+      this.setState({
+        txBeingSent: tx.hash,
+      });
+
+      await tx.wait();
+    } catch (error) {
+      if (error.code === ERROR_CODE_TX_REJECTED_BY_USER) {
+        return;
+      }
+
+      console.error(error);
+
+      this.setState({
+        transactionError: error,
+      });
+    } finally {
+      this.setState({
+        txBeingSent: null,
+      });
+      await this.updateBalance();
+      //await this.updateStopped();
+    }
+  };
+
+  _getRpcErrorMessage(error) {
+    if (error.data) {
+      return error.data.message;
+    }
+
+    return error.message;
+  }
+
+  render() {
+    if (!this.state.selectedAccount) {
+      return (
+        <ConnectWallet
+          connectWallet={this._connectWallet}
+          networkError={this.state.networkError}
+          dismiss={this._dismissNetworkError}
         />
-      </div>
+      );
+    }
 
-      <div className="mb-32 grid text-center lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`${inter.className} mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p
-            className={`${inter.className} m-0 max-w-[30ch] text-sm opacity-50`}
-          >
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
+    return (
+      <>
+        <script src="../components/script.js"></script>
+        {this.state.txBeingSent && (
+          <WaitingForTransactionMessage txHash={this.state.txBeingSent} />
+        )}
 
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`${inter.className} mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p
-            className={`${inter.className} m-0 max-w-[30ch] text-sm opacity-50`}
-          >
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
+        {this.state.transactionError && (
+          <TransactionErrorMessage
+            message={this._getRpcErrorMessage(this.state.transactionError)}
+            dismiss={this._dismissTransactionError}
+          />
+        )}
+        {this.state.balance && (
+          <p>
+            Your balance: {ethers.utils.formatEther(this.state.balance)} ETH
           </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`${inter.className} mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p
-            className={`${inter.className} m-0 max-w-[30ch] text-sm opacity-50`}
-          >
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
+        )}
+        <div>
+          <h3>ДОБРО ПОЖАЛОВАТЬ НА НАШУ ПЛАТФОРМУ VIP АУКЦИОНОВ</h3>
+          <p className="mainText">
+            <b>Правила аукциона:</b> подавайте ставки до истечения времени. По
+            завершению аукциона, определяются победители(по количеству лотов) -
+            участники подавшие наибольшие ставки. Ранжирование - от наивысшей
+            ставки к наименьшей. Победители получают NFT-билеты.
           </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`${inter.className} mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p
-            className={`${inter.className} m-0 max-w-[30ch] text-sm opacity-50`}
-          >
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  )
+          <br />
+          <div>
+            <b>АДМИН ПАНЕЛЬ:</b>
+            <br />
+            <div class="formWrapper">
+              <ul>
+                <li class="formLine">
+                  <label for="item"> Наименование лота</label>
+                  <input type="text" id="_item" />
+                </li>
+                <li class="formLine">
+                  <label for="_ticketsSupply"> Количество лотов</label>
+                  <input type="text" id="_ticketsSupply" />
+                </li>
+                <li class="formLine">
+                  <label for="_minBid"> Минимальная ставка(BNB)</label>
+                  <input type="text" id="_minBid" />
+                </li>
+                <li class="formLine">
+                  <label for="_revenueAddress"> Адрес дохода</label>
+                  <input type="text" id="_revenueAddress" />
+                </li>
+                <li class="formLine">
+                  <label for="_duration"> Длительность аукциона</label>
+                  <input type="text" id="_duration" />
+                </li>
+                <li class="formLine">
+                  <button onClick={this.createAuction}>
+                    Создать и начать аукцион
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <br />
+          <br />
+          <br />
+          <div class="formWrapper">
+              <ul>
+          <li class="formLine">
+                  <label for="_bid"> Сделать ставку</label>
+                  <input type="text" id="_bid" />
+                </li>
+                <li class="formLine">
+                  <button onClick={this.bid}>
+                  Сделать ставку
+                  </button>
+                </li>
+              </ul>
+            </div>
+          <br />
+          <br />
+          <br />
+          <br />
+          <br />
+          <br />
+          <br />
+          <br />
+          <div>
+            <button onClick={this.getAuctionsLength}>
+              Обновить количество аукционов
+            </button>
+            {this.state.auctionsLength && (
+              <p>Уже провели: {this.state.auctionsLength}</p>
+            )}
+          </div>
+          <div>
+            <b>ТЕКУЩИЕ АУКЦИОНЫ:</b>
+            <button onClick={this.fillAuctions}>Обновить аукционы</button>
+            <div id="auctionsList"></div>
+          </div>
+          <br />
+          <br />
+          <div>
+            <b>ПРОШЕДШИЕ АУКЦИОНЫ:</b>
+          </div>
+        </div>
+      </>
+    );
+  }
 }
